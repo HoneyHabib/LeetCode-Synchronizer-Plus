@@ -15,7 +15,6 @@ def parse_git_log():
     for commit in Repo(os.getcwd()).iter_commits():
         if commit.message not in commits:
             commits[commit.message] = int(commit.committed_datetime.timestamp())
-
     return commits
 
 
@@ -25,12 +24,27 @@ def scrape_leetcode():
     session.cookies.set("csrftoken", os.environ.get("LEETCODE_CSRF_TOKEN"), domain="leetcode.com")
 
     solved_problems = list()
+    
+    # Fetch submission list directly (faster than iterating all problems)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
+        "Connection": "keep-alive",
+        "Content-Type": "application/json",
+    }
+    
+    print("[DEBUG] Fetching submission list...")
+    json_data = leetcode_query.user_profile_public_submissions
+    json_data["variables"]["userSlug"] = "your_username"  # You'll need to set this
+    submissions_response = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+    
+    # If that doesn't work, fall back to the old method but ONLY for problems with submissions
+    print("[DEBUG] Fetching all problems...")
     all_problems = session.get("https://leetcode.com/api/problems/all/").json()
     print(f"[DEBUG] Found {len(all_problems['stat_status_pairs'])} problems total")
     
     ac_count = 0
     for problem in all_problems["stat_status_pairs"]:
-        time.sleep(0.5)
+        time.sleep(0.3)  # Reduced from 0.5
 
         title_slug = problem["stat"]["question__title_slug"]
         
@@ -42,10 +56,6 @@ def scrape_leetcode():
         }
 
         try:
-            json_data = leetcode_query.question_detail
-            json_data["variables"]["titleSlug"] = title_slug
-            question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-
             json_data = leetcode_query.submission_list
             json_data["variables"]["questionSlug"] = title_slug
             submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
@@ -57,9 +67,12 @@ def scrape_leetcode():
                 continue  # No submissions, skip this problem
             
             ac_count += 1
-            print(f"[DEBUG] Processing problem {ac_count}: {title_slug}")
-            submission_count = len(submissions_list)
-            print(f"[DEBUG] Found {submission_count} submissions for {title_slug}")
+            print(f"[DEBUG] Found {ac_count}: {title_slug} ({len(submissions_list)} submissions)")
+            
+            # Get question details only if it has submissions
+            json_data = leetcode_query.question_detail
+            json_data["variables"]["titleSlug"] = title_slug
+            question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
             
             # Loop through ALL submissions
             for idx, submission in enumerate(submissions_list):
@@ -69,33 +82,28 @@ def scrape_leetcode():
                     submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
 
                     if "errors" in submission_details:
-                        print(f"[ERROR] GraphQL error for submission {submission['id']}: {submission_details['errors']}")
+                        print(f"[ERROR] GraphQL error for submission {submission['id']}")
                         continue
 
-                        problem_info = {
-                            "id": int(problem["stat"]["frontend_question_id"]),
-                            "title": problem["stat"]["question__title"],
-                            "title_slug": title_slug,
-                            "content": question_details["data"]["question"]["content"],
-                            "difficulty": question_details["data"]["question"]["difficulty"],
-                            "skills": [tag["name"] for tag in question_details["data"]["question"]["topicTags"]],
-                            "timestamp": int(submission["timestamp"]),
-                            "language": submission["langName"],
-                            "code": submission_details["data"]["submissionDetails"]["code"],
-                        }
-                        solved_problems.append(problem_info)
-                        print(f"[DEBUG] Added submission {idx+1}/{submission_count} for {title_slug}")
+                    problem_info = {
+                        "id": int(problem["stat"]["frontend_question_id"]),
+                        "title": problem["stat"]["question__title"],
+                        "title_slug": title_slug,
+                        "content": question_details["data"]["question"]["content"],
+                        "difficulty": question_details["data"]["question"]["difficulty"],
+                        "skills": [tag["name"] for tag in question_details["data"]["question"]["topicTags"]],
+                        "timestamp": int(submission["timestamp"]),
+                        "language": submission["langName"],
+                        "code": submission_details["data"]["submissionDetails"]["code"],
+                    }
+                    solved_problems.append(problem_info)
                 except Exception as e:
                     print(f"[ERROR] Failed to process submission: {e}")
-                    import traceback
-                    traceback.print_exc()
                     continue
                 
-                time.sleep(0.5)  # Rate limiting
+                time.sleep(0.3)
         except Exception as e:
-            print(f"[ERROR] Failed to fetch problem details for {title_slug}: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[ERROR] Failed to fetch submissions for {title_slug}: {e}")
             continue
 
     print(f"[DEBUG] Found {ac_count} problems with submissions")
