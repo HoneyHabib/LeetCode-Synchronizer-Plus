@@ -9,37 +9,6 @@ import urllib.parse
 from git import Repo
 import leetcode_query
 
-def require_json(response, context):
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"LeetCode API failed ({context}) "
-            f"with status {response.status_code}. "
-            "Cookies may be expired."
-        )
-    try:
-        return response.json()
-    except Exception:
-        raise RuntimeError(
-            f"LeetCode API returned non-JSON ({context}). "
-            "Your LEETCODE_SESSION or CSRF token is likely expired."
-        )
-
-def require_graphql_data(response, context):
-    payload = require_json(response, context)
-
-    if "errors" in payload:
-        raise RuntimeError(
-            f"LeetCode GraphQL error ({context}): "
-            f"{payload['errors'][0].get('message', payload['errors'])}"
-        )
-
-    if "data" not in payload or payload["data"] is None:
-        raise RuntimeError(
-            f"LeetCode GraphQL returned no data ({context}). "
-            "Authentication or query structure may be broken."
-        )
-
-    return payload["data"]
 
 def parse_git_log():
     commits = dict()
@@ -56,9 +25,7 @@ def scrape_leetcode():
     session.cookies.set("csrftoken", os.environ.get("LEETCODE_CSRF_TOKEN"), domain="leetcode.com")
 
     solved_problems = list()
-    # all_problems = session.get("https://leetcode.com/api/problems/all/").json()
-    resp = session.get("https://leetcode.com/api/problems/all/")
-    all_problems = require_json(resp, "fetching problem list")
+    all_problems = session.get("https://leetcode.com/api/problems/all/").json()
     for problem in all_problems["stat_status_pairs"]:
         if problem["status"] == "ac":
             time.sleep(1)
@@ -73,58 +40,16 @@ def scrape_leetcode():
 
             json_data = leetcode_query.question_detail
             json_data["variables"]["titleSlug"] = title_slug
-            # question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-            resp = session.post(
-                "https://leetcode.com/graphql",
-                json=json_data,
-                headers=headers,
-                timeout=10
-            )
-            question_details = require_graphql_data(
-                resp, f"question details for {title_slug}"
-            )
-
+            question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            
             json_data = leetcode_query.submission_list
             json_data["variables"]["questionSlug"] = title_slug
-            # submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-            resp = session.post(
-                "https://leetcode.com/graphql",
-                json=json_data,
-                headers=headers,
-                timeout=10
-            )
-            submissions = require_graphql_data(
-                resp, f"submission list for {title_slug}"
-            )
-            # ✅ GUARD EMPTY / MISSING SUBMISSIONS
-            submission_list = submissions.get("data", {}) \
-                                        .get("questionSubmissionList", {}) \
-                                        .get("submissions", [])
+            submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
 
-            if not submission_list:
-                # No accepted submissions found — skip safely
-                continue
-
-            latest_submission_id = submission_list[0]["id"]
             json_data = leetcode_query.submission_details
-            json_data["variables"]["submissionId"] = latest_submission_id
-            resp = session.post(
-                "https://leetcode.com/graphql",
-                json=json_data,
-                headers=headers,
-                timeout=10
-            )
-            submission_details = require_graphql_data(
-                resp, f"submission details for {title_slug}"
-            )
-            code = submission_details.get("data", {}) \
-                         .get("submissionDetails", {}) \
-                         .get("code")
+            json_data["variables"]["submissionId"] = submissions["data"]["questionSubmissionList"]["submissions"][0]["id"]
+            submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
 
-            if not code:
-                continue
-
-            latest_submission = submission_list[0]
             problem_info = {
                 "id": int(problem["stat"]["frontend_question_id"]),
                 "title": problem["stat"]["question__title"],
@@ -132,9 +57,9 @@ def scrape_leetcode():
                 "content": question_details["data"]["question"]["content"],
                 "difficulty": question_details["data"]["question"]["difficulty"],
                 "skills": [tag["name"] for tag in question_details["data"]["question"]["topicTags"]],
-                "timestamp": int(latest_submission["timestamp"]),
-                "language": latest_submission["langName"],
-                "code": code,
+                "timestamp": int(submissions["data"]["questionSubmissionList"]["submissions"][0]["timestamp"]),
+                "language": submissions["data"]["questionSubmissionList"]["submissions"][0]["langName"],
+                "code": submission_details["data"]["submissionDetails"]["code"],
             }
             solved_problems.append(problem_info)
 
