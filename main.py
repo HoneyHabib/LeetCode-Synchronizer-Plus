@@ -9,6 +9,37 @@ import urllib.parse
 from git import Repo
 import leetcode_query
 
+def require_json(response, context):
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"LeetCode API failed ({context}) "
+            f"with status {response.status_code}. "
+            "Cookies may be expired."
+        )
+    try:
+        return response.json()
+    except Exception:
+        raise RuntimeError(
+            f"LeetCode API returned non-JSON ({context}). "
+            "Your LEETCODE_SESSION or CSRF token is likely expired."
+        )
+
+def require_graphql_data(response, context):
+    payload = require_json(response, context)
+
+    if "errors" in payload:
+        raise RuntimeError(
+            f"LeetCode GraphQL error ({context}): "
+            f"{payload['errors'][0].get('message', payload['errors'])}"
+        )
+
+    if "data" not in payload or payload["data"] is None:
+        raise RuntimeError(
+            f"LeetCode GraphQL returned no data ({context}). "
+            "Authentication or query structure may be broken."
+        )
+
+    return payload["data"]
 
 def parse_git_log():
     commits = dict()
@@ -25,7 +56,9 @@ def scrape_leetcode():
     session.cookies.set("csrftoken", os.environ.get("LEETCODE_CSRF_TOKEN"), domain="leetcode.com")
 
     solved_problems = list()
-    all_problems = session.get("https://leetcode.com/api/problems/all/").json()
+    # all_problems = session.get("https://leetcode.com/api/problems/all/").json()
+    resp = session.get("https://leetcode.com/api/problems/all/")
+    all_problems = require_json(resp, "fetching problem list")
     for problem in all_problems["stat_status_pairs"]:
         if problem["status"] == "ac":
             time.sleep(1)
@@ -40,16 +73,58 @@ def scrape_leetcode():
 
             json_data = leetcode_query.question_detail
             json_data["variables"]["titleSlug"] = title_slug
-            question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            # question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            resp = session.post(
+                "https://leetcode.com/graphql",
+                json=json_data,
+                headers=headers,
+                timeout=10
+            )
+            question_details = require_graphql_data(
+                resp, f"question details for {title_slug}"
+            )
 
             json_data = leetcode_query.submission_list
             json_data["variables"]["questionSlug"] = title_slug
-            submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            # submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            resp = session.post(
+                "https://leetcode.com/graphql",
+                json=json_data,
+                headers=headers,
+                timeout=10
+            )
+            submissions = require_graphql_data(
+                resp, f"submission list for {title_slug}"
+            )
+            # ✅ GUARD EMPTY / MISSING SUBMISSIONS
+            submission_list = submissions.get("data", {}) \
+                                        .get("questionSubmissionList", {}) \
+                                        .get("submissions", [])
 
+            if not submission_list:
+                # No accepted submissions found — skip safely
+                continue
+
+            latest_submission_id = submission_list[0]["id"]
             json_data = leetcode_query.submission_details
-            json_data["variables"]["submissionId"] = submissions["data"]["questionSubmissionList"]["submissions"][0]["id"]
-            submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            json_data["variables"]["submissionId"] = latest_submission_id
+            resp = session.post(
+                "https://leetcode.com/graphql",
+                json=json_data,
+                headers=headers,
+                timeout=10
+            )
+            submission_details = require_graphql_data(
+                resp, f"submission details for {title_slug}"
+            )
+            code = submission_details.get("data", {}) \
+                         .get("submissionDetails", {}) \
+                         .get("code")
 
+            if not code:
+                continue
+
+            latest_submission = submission_list[0]
             problem_info = {
                 "id": int(problem["stat"]["frontend_question_id"]),
                 "title": problem["stat"]["question__title"],
@@ -57,31 +132,63 @@ def scrape_leetcode():
                 "content": question_details["data"]["question"]["content"],
                 "difficulty": question_details["data"]["question"]["difficulty"],
                 "skills": [tag["name"] for tag in question_details["data"]["question"]["topicTags"]],
-                "timestamp": int(submissions["data"]["questionSubmissionList"]["submissions"][0]["timestamp"]),
-                "language": submissions["data"]["questionSubmissionList"]["submissions"][0]["langName"],
-                "code": submission_details["data"]["submissionDetails"]["code"],
+                "timestamp": int(latest_submission["timestamp"]),
+                "language": latest_submission["langName"],
+                "code": code,
             }
             solved_problems.append(problem_info)
 
     return sorted(solved_problems, key=lambda entry: entry["timestamp"])
 
+def calculate_stats(submissions):
+    stats = {
+        "total": len(submissions),
+        "Easy": 0,
+        "Medium": 0,
+        "Hard": 0,
+    }
+
+    for s in submissions:
+        if s["difficulty"] in stats:
+            stats[s["difficulty"]] += 1
+
+    return stats
 
 def update_readme(submissions):
-    template = """
+    stats = calculate_stats(submissions)
+
+    difficulty_badges = {
+        "Easy": "![Easy](https://img.shields.io/badge/Easy-success)",
+        "Medium": "![Medium](https://img.shields.io/badge/Medium-yellow)",
+        "Hard": "![Hard](https://img.shields.io/badge/Hard-red)",
+    }
+    template = f"""
 # LeetCode Submissions
 
 > Auto-generated with [LeetCode Synchronizer](https://github.com/dos-m0nk3y/LeetCode-Synchronizer)
+
+## 📊 Stats
+
+- **Total Solved:** {stats["total"]}
+- 🟢 Easy: {stats["Easy"]}
+- 🟡 Medium: {stats["Medium"]}
+- 🔴 Hard: {stats["Hard"]}
+
+---
 
 ## Contents
 
 | # | Title | Difficulty | Skills |
 |---| ----- | ---------- | ------ |
 """
-
     for submission in submissions:
         title = f"[{submission['title']}](https://leetcode.com/problems/{submission['title_slug']})"
         skills = " ".join([f"`{skill}`" for skill in submission["skills"]])
-        template += f"| {str(submission['id']).zfill(4)} | {title} | {submission['difficulty']} | {skills} |\n"
+        difficulty = difficulty_badges.get(
+            submission["difficulty"],
+            submission["difficulty"]
+        )
+        template += f"| {str(submission['id']).zfill(4)} | {title} | {difficulty} | {skills} |\n"
 
     with open("README.md", "wt") as fd:
         fd.write(template.strip())
@@ -99,8 +206,13 @@ def sync_github(commits, submissions):
     repo.config_writer().set_value("user", "email", commit.author.email).release()
 
     for submission in submissions:
-        commit_message = f"LeetCode Synchronization - {submission['title']} ({submission['language']})"
-        if commit_message not in commits or commits[commit_message] < submission["timestamp"]:
+        ts = datetime.datetime.fromtimestamp(submission["timestamp"])
+        timestamp_name = f"{ts.strftime('%Y-%m-%dT%H-%M-%S')}_{submission['timestamp']}"
+        commit_message = (
+            f"LeetCode [{submission['id']}] "
+            f"{submission['title']} | {submission['language']} | {timestamp_name}"
+        )
+        if commit_message not in commits:
             dir_name = f"{str(submission['id']).zfill(4)}-{submission['title_slug']}"
             if submission["language"] == "C++":
                 ext = "cpp"
@@ -119,12 +231,14 @@ def sync_github(commits, submissions):
                 ext = submission["language"].lower().replace(" ", "")
 
             pathlib.Path(f"problems/{dir_name}").mkdir(parents=True, exist_ok=True)
-            with open(f"problems/{dir_name}/{dir_name}.{ext}", "wt") as fd:
+            with open(f"problems/{dir_name}/{timestamp_name}.{ext}", "wt") as fd:
                 fd.write(submission["code"].strip())
-            with open(f"problems/{dir_name}/README.md", "wt") as fd:
-                content = f"<h2>{submission['id']}. {submission['title']}</h2>\n\n"
-                content += submission["content"].strip()
-                fd.write(content)
+            readme_path = f"problems/{dir_name}/README.md"
+            if not os.path.exists(readme_path):
+                with open(readme_path, "wt") as fd:
+                    content = f"<h2>{submission['id']}. {submission['title']}</h2>\n\n"
+                    content += submission["content"].strip()
+                    fd.write(content)
 
             submission["skills"].sort()
             new_submission = {
