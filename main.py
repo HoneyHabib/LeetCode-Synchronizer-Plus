@@ -25,26 +25,19 @@ def scrape_leetcode():
 
     solved_problems = list()
     
-    # Fetch submission list directly (faster than iterating all problems)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
         "Connection": "keep-alive",
         "Content-Type": "application/json",
     }
     
-    print("[DEBUG] Fetching submission list...")
-    json_data = leetcode_query.user_profile_public_submissions
-    json_data["variables"]["userSlug"] = "your_username"  # You'll need to set this
-    submissions_response = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-    
-    # If that doesn't work, fall back to the old method but ONLY for problems with submissions
     print("[DEBUG] Fetching all problems...")
     all_problems = session.get("https://leetcode.com/api/problems/all/").json()
     print(f"[DEBUG] Found {len(all_problems['stat_status_pairs'])} problems total")
     
     ac_count = 0
     for problem in all_problems["stat_status_pairs"]:
-        time.sleep(0.3)  # Reduced from 0.5
+        time.sleep(0.3)
 
         title_slug = problem["stat"]["question__title_slug"]
         
