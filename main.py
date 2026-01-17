@@ -46,59 +46,27 @@ def scrape_leetcode():
             json_data["variables"]["questionSlug"] = title_slug
             submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
 
-            json_data = leetcode_query.submission_details
-            json_data["variables"]["submissionId"] = submissions["data"]["questionSubmissionList"]["submissions"][0]["id"]
-            submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+            # Loop through ALL submissions instead of just [0]
+            for submission in submissions["data"]["questionSubmissionList"]["submissions"]:
+                json_data = leetcode_query.submission_details
+                json_data["variables"]["submissionId"] = submission["id"]
+                submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
 
-            problem_info = {
-                "id": int(problem["stat"]["frontend_question_id"]),
-                "title": problem["stat"]["question__title"],
-                "title_slug": title_slug,
-                "content": question_details["data"]["question"]["content"],
-                "difficulty": question_details["data"]["question"]["difficulty"],
-                "skills": [tag["name"] for tag in question_details["data"]["question"]["topicTags"]],
-                "timestamp": int(submissions["data"]["questionSubmissionList"]["submissions"][0]["timestamp"]),
-                "language": submissions["data"]["questionSubmissionList"]["submissions"][0]["langName"],
-                "code": submission_details["data"]["submissionDetails"]["code"],
-            }
-            solved_problems.append(problem_info)
+                problem_info = {
+                    "id": int(problem["stat"]["frontend_question_id"]),
+                    "title": problem["stat"]["question__title"],
+                    "title_slug": title_slug,
+                    "content": question_details["data"]["question"]["content"],
+                    "difficulty": question_details["data"]["question"]["difficulty"],
+                    "skills": [tag["name"] for tag in question_details["data"]["question"]["topicTags"]],
+                    "timestamp": int(submission["timestamp"]),
+                    "language": submission["langName"],
+                    "code": submission_details["data"]["submissionDetails"]["code"],
+                }
+                solved_problems.append(problem_info)
 
     return sorted(solved_problems, key=lambda entry: entry["timestamp"])
 
-
-# def update_readme(submissions):
-#     template = """
-# # LeetCode Submissions
-
-# > Auto-generated with [LeetCode Synchronizer](https://github.com/dos-m0nk3y/LeetCode-Synchronizer)
-
-# ## Contents
-
-# | # | Title | Difficulty | Skills |
-# |---| ----- | ---------- | ------ |
-# """
-#     difficulty_badge = {
-#         "Easy": "https://img.shields.io/badge/Easy-green",
-#         "Medium": "https://img.shields.io/badge/Medium-orange",
-#         "Hard": "https://img.shields.io/badge/Hard-red",
-#     }
-
-#     for submission in submissions:
-#         title = f"[{submission['title']}](https://leetcode.com/problems/{submission['title_slug']})"
-#         skills = " ".join([f"`{skill}`" for skill in submission["skills"]])
-
-#         diff = submission["difficulty"]
-#         badge = f"![{diff}]({difficulty_badge.get(diff, '')})"
-
-#         template += (
-#             f"| {str(submission['id']).zfill(4)} "
-#             f"| {title} "
-#             f"| {badge} "
-#             f"| {skills} |\n"
-#         )
-
-#     with open("README.md", "wt", encoding="utf-8") as fd:
-#         fd.write(template.strip())
 def update_readme(submissions):
     # ---------- STATS ----------
     stats = {
