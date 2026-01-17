@@ -31,11 +31,23 @@ def scrape_leetcode():
     # Count by status
     status_counts = {}
     for problem in all_problems["stat_status_pairs"]:
-        status = problem.get("status", "null")
+        status = problem.get("status")
         status_counts[status] = status_counts.get(status, 0) + 1
     
     print(f"[DEBUG] Status breakdown: {status_counts}")
     
+    # Show sample of first problem with each status type
+    print(f"\n[DEBUG] Sample problems by status:")
+    shown = set()
+    for problem in all_problems["stat_status_pairs"]:
+        status = problem.get("status")
+        if status not in shown:
+            print(f"  Status={status}: {problem['stat']['question__title']}")
+            shown.add(status)
+    
+    # STOP HERE - don't continue, just print info
+    return []
+
     ac_count = 0
     for problem in all_problems["stat_status_pairs"]:
         if problem["status"] == "ac":
