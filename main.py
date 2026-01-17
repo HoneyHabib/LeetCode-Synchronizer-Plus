@@ -1,3 +1,4 @@
+@ -0,0 +1,169 @@
 import os
 import time
 import json
@@ -41,7 +42,7 @@ def scrape_leetcode():
             json_data = leetcode_query.question_detail
             json_data["variables"]["titleSlug"] = title_slug
             question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-            
+
             json_data = leetcode_query.submission_list
             json_data["variables"]["questionSlug"] = title_slug
             submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
@@ -65,9 +66,43 @@ def scrape_leetcode():
 
     return sorted(solved_problems, key=lambda entry: entry["timestamp"])
 
-def calculate_stats(submissions):
+
+# def update_readme(submissions):
+#     template = """
+# # LeetCode Submissions
+
+# > Auto-generated with [LeetCode Synchronizer](https://github.com/dos-m0nk3y/LeetCode-Synchronizer)
+
+# ## Contents
+
+# | # | Title | Difficulty | Skills |
+# |---| ----- | ---------- | ------ |
+# """
+#     difficulty_badge = {
+#         "Easy": "https://img.shields.io/badge/Easy-green",
+#         "Medium": "https://img.shields.io/badge/Medium-orange",
+#         "Hard": "https://img.shields.io/badge/Hard-red",
+#     }
+
+#     for submission in submissions:
+#         title = f"[{submission['title']}](https://leetcode.com/problems/{submission['title_slug']})"
+#         skills = " ".join([f"`{skill}`" for skill in submission["skills"]])
+
+#         diff = submission["difficulty"]
+#         badge = f"![{diff}]({difficulty_badge.get(diff, '')})"
+
+#         template += (
+#             f"| {str(submission['id']).zfill(4)} "
+#             f"| {title} "
+#             f"| {badge} "
+#             f"| {skills} |\n"
+#         )
+
+#     with open("README.md", "wt", encoding="utf-8") as fd:
+#         fd.write(template.strip())
+def update_readme(submissions):
+    # ---------- STATS ----------
     stats = {
-        "total": len(submissions),
         "Easy": 0,
         "Medium": 0,
         "Hard": 0,
@@ -77,27 +112,26 @@ def calculate_stats(submissions):
         if s["difficulty"] in stats:
             stats[s["difficulty"]] += 1
 
-    return stats
+    total = sum(stats.values())
 
-def update_readme(submissions):
-    stats = calculate_stats(submissions)
-
-    difficulty_badges = {
-        "Easy": "![Easy](https://img.shields.io/badge/Easy-success)",
-        "Medium": "![Medium](https://img.shields.io/badge/Medium-yellow)",
-        "Hard": "![Hard](https://img.shields.io/badge/Hard-red)",
+    difficulty_badge = {
+        "Easy": "https://img.shields.io/badge/Easy-green",
+        "Medium": "https://img.shields.io/badge/Medium-orange",
+        "Hard": "https://img.shields.io/badge/Hard-red",
     }
+
+    # ---------- README HEADER ----------
     template = f"""
 # LeetCode Submissions
 
-> Auto-generated with [LeetCode Synchronizer](https://github.com/dos-m0nk3y/LeetCode-Synchronizer)
+> Auto-generated with [LeetCode Synchronizer Plus](https://github.com/HoneyHabib/LeetCode-Synchronizer-Plus)
 
 ## 📊 Stats
 
-- **Total Solved:** {stats["total"]}
-- 🟢 Easy: {stats["Easy"]}
-- 🟡 Medium: {stats["Medium"]}
-- 🔴 Hard: {stats["Hard"]}
+![Total](https://img.shields.io/badge/Total-{total}-blue)
+![Easy](https://img.shields.io/badge/Easy-{stats['Easy']}-green)
+![Medium](https://img.shields.io/badge/Medium-{stats['Medium']}-orange)
+![Hard](https://img.shields.io/badge/Hard-{stats['Hard']}-red)
 
 ---
 
@@ -107,80 +141,76 @@ def update_readme(submissions):
 |---| ----- | ---------- | ------ |
 """
 
+    # ---------- TABLE ----------
     for submission in submissions:
         title = f"[{submission['title']}](https://leetcode.com/problems/{submission['title_slug']})"
         skills = " ".join([f"`{skill}`" for skill in submission["skills"]])
-        difficulty = difficulty_badges.get(
-            submission["difficulty"],
-            submission["difficulty"]
-        )
-        template += f"| {str(submission['id']).zfill(4)} | {title} | {difficulty} | {skills} |\n"
 
-    with open("README.md", "wt") as fd:
+        diff = submission["difficulty"]
+        badge = f"![{diff}]({difficulty_badge.get(diff, '')})"
+
+        template += (
+            f"| {str(submission['id']).zfill(4)} "
+            f"| {title} "
+            f"| {badge} "
+            f"| {skills} |\n"
+        )
+
+    with open("README.md", "wt", encoding="utf-8") as fd:
         fd.write(template.strip())
 
 
 def sync_github(commits, submissions):
     repo = Repo(os.getcwd())
 
-    # Authenticated remote
+    # ---------- auth ----------
     url = urllib.parse.urlparse(repo.remote("origin").url)
     url = url._replace(netloc=f"{os.environ.get('GITHUB_TOKEN')}@" + url.netloc)
     url = url._replace(path=url.path + ".git")
     repo.remote("origin").set_url(url.geturl())
 
-    # Set git identity
-    commit = list(repo.iter_commits())[0]
-    repo.config_writer().set_value("user", "name", commit.author.name).release()
-    repo.config_writer().set_value("user", "email", commit.author.email).release()
+    last_commit = list(repo.iter_commits())[0]
+    repo.config_writer().set_value("user", "name", last_commit.author.name).release()
+    repo.config_writer().set_value("user", "email", last_commit.author.email).release()
 
     for submission in submissions:
-        # ── timestamp
-        ts = datetime.datetime.fromtimestamp(submission["timestamp"])
-        timestamp_name = f"{ts.strftime('%Y-%m-%dT%H-%M-%S')}_{submission['timestamp']}"
-
-        # ── directory
         dir_name = f"{str(submission['id']).zfill(4)}-{submission['title_slug']}"
+        base_dir = pathlib.Path("problems") / dir_name
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── extension
-        if submission["language"] == "C++":
-            ext = "cpp"
-        elif submission["language"] in ["JavaScript", "JavaScript (Node.js)"]:
-            ext = "js"
-        elif submission["language"] == "MySQL":
-            ext = "sql"
-        elif submission["language"] == "Bash":
-            ext = "sh"
-        elif submission["language"] == "Python":
-            ext = "py"
-        elif submission["language"] == "Java":
-            ext = "java"
-        else:
-            ext = submission["language"].lower().replace(" ", "")
+        # ---------- language → extension ----------
+        ext = {
+            "C++": "cpp",
+            "JavaScript": "js",
+            "JavaScript (Node.js)": "js",
+            "MySQL": "sql",
+            "Bash": "sh",
+            "Python": "py",
+            "Java": "java",
+        }.get(submission["language"], submission["language"].lower().replace(" ", ""))
 
-        file_path = f"problems/{dir_name}/{timestamp_name}.{ext}"
+        # ---------- UNIQUE FILE (NO OVERRIDE) ----------
+        ts = datetime.datetime.fromtimestamp(submission["timestamp"])
+        filename = f"{ts.strftime('%Y-%m-%dT%H-%M-%S')}_{submission['timestamp']}.{ext}"
+        solution_file = base_dir / filename
 
-        # ── ✅ FILE-BASED SYNC (THE KEY FIX)
-        if os.path.exists(file_path):
-            continue
+        if solution_file.exists():
+            continue  # already synced
 
-        # ── write solution
-        pathlib.Path(f"problems/{dir_name}").mkdir(parents=True, exist_ok=True)
-        with open(file_path, "wt") as fd:
-            fd.write(submission["code"].strip())
+        solution_file.write_text(submission["code"].strip(), encoding="utf-8")
 
-        # ── per-problem README
-        readme_path = f"problems/{dir_name}/README.md"
-        if not os.path.exists(readme_path):
-            with open(readme_path, "wt") as fd:
-                fd.write(
-                    f"<h2>{submission['id']}. {submission['title']}</h2>\n\n"
-                    + submission["content"].strip()
-                )
+        # ---------- README (write once) ----------
+        readme = base_dir / "README.md"
+        if not readme.exists():
+            readme.write_text(
+                f"<h2>{submission['id']}. {submission['title']}</h2>\n\n"
+                + submission["content"].strip(),
+                encoding="utf-8",
+            )
 
-        # ── update root README + submissions.json
+        # ---------- update global README ----------
         submission["skills"].sort()
-        new_submission = {
+        new_entry = {
             "id": submission["id"],
             "title": submission["title"],
             "title_slug": submission["title_slug"],
@@ -190,31 +220,29 @@ def sync_github(commits, submissions):
 
         saved = []
         if os.path.isfile("submissions.json"):
-            with open("submissions.json", "rt") as fd:
-                saved = json.load(fd)
+            with open("submissions.json", "rt") as f:
+                saved = json.load(f)
 
-        if new_submission not in saved:
-            saved.append(new_submission)
-            saved = sorted(saved, key=lambda e: e["id"])
+        if new_entry not in saved:
+            saved.append(new_entry)
+            saved = sorted(saved, key=lambda x: x["id"])
             update_readme(saved)
-            with open("submissions.json", "wt") as fd:
-                json.dump(saved, fd, indent=2)
+            with open("submissions.json", "wt") as f:
+                json.dump(saved, f, indent=2)
 
-        # ── commit
-        commit_message = (
+        # ---------- commit ----------
+        commit_msg = (
             f"LeetCode [{submission['id']}] "
-            f"{submission['title']} | {submission['language']} | {timestamp_name}"
+            f"{submission['title']} | {submission['language']} | {filename}"
         )
 
-        iso_datetime = email.utils.format_datetime(
-            datetime.datetime.fromtimestamp(submission["timestamp"])
-        )
-        os.environ["GIT_AUTHOR_DATE"] = iso_datetime
-        os.environ["GIT_COMMITTER_DATE"] = iso_datetime
+        iso_date = email.utils.format_datetime(ts)
+        os.environ["GIT_AUTHOR_DATE"] = iso_date
+        os.environ["GIT_COMMITTER_DATE"] = iso_date
 
-        repo.index.add(["problems", "README.md", "submissions.json"])
-        repo.index.commit(commit_message)
-        repo.git.push("origin")
+        repo.index.add([str(base_dir), "README.md", "submissions.json"])
+        repo.index.commit(commit_msg)
+        repo.remote("origin").push()
 
         os.environ.pop("GIT_AUTHOR_DATE", None)
         os.environ.pop("GIT_COMMITTER_DATE", None)
