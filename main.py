@@ -28,64 +28,49 @@ def scrape_leetcode():
     all_problems = session.get("https://leetcode.com/api/problems/all/").json()
     print(f"[DEBUG] Found {len(all_problems['stat_status_pairs'])} problems total")
     
-    # Count by status
-    status_counts = {}
-    for problem in all_problems["stat_status_pairs"]:
-        status = problem.get("status")
-        status_counts[status] = status_counts.get(status, 0) + 1
-    
-    print(f"[DEBUG] Status breakdown: {status_counts}")
-    
-    # Show sample of first problem with each status type
-    print(f"\n[DEBUG] Sample problems by status:")
-    shown = set()
-    for problem in all_problems["stat_status_pairs"]:
-        status = problem.get("status")
-        if status not in shown:
-            print(f"  Status={status}: {problem['stat']['question__title']}")
-            shown.add(status)
-    
-    # STOP HERE - don't continue, just print info
-    return []
-
     ac_count = 0
     for problem in all_problems["stat_status_pairs"]:
-        if problem["status"] == "ac":
-            ac_count += 1
-            time.sleep(1)
+        time.sleep(0.5)
 
-            title_slug = problem["stat"]["question__title_slug"]
-            print(f"[DEBUG] Processing problem {ac_count}: {title_slug}")
+        title_slug = problem["stat"]["question__title_slug"]
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
+            "Connection": "keep-alive",
+            "Content-Type": "application/json",
+            "Referer": "https://leetcode.com/problems/" + title_slug,
+        }
+
+        try:
+            json_data = leetcode_query.question_detail
+            json_data["variables"]["titleSlug"] = title_slug
+            question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+
+            json_data = leetcode_query.submission_list
+            json_data["variables"]["questionSlug"] = title_slug
+            submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
+
+            # Check if submission_list has any submissions
+            submissions_list = submissions.get("data", {}).get("questionSubmissionList", {}).get("submissions", [])
             
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
-                "Connection": "keep-alive",
-                "Content-Type": "application/json",
-                "Referer": "https://leetcode.com/problems/" + title_slug,
-            }
+            if not submissions_list:
+                continue  # No submissions, skip this problem
+            
+            ac_count += 1
+            print(f"[DEBUG] Processing problem {ac_count}: {title_slug}")
+            submission_count = len(submissions_list)
+            print(f"[DEBUG] Found {submission_count} submissions for {title_slug}")
+            
+            # Loop through ALL submissions
+            for idx, submission in enumerate(submissions_list):
+                try:
+                    json_data = leetcode_query.submission_details
+                    json_data["variables"]["submissionId"] = submission["id"]
+                    submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
 
-            try:
-                json_data = leetcode_query.question_detail
-                json_data["variables"]["titleSlug"] = title_slug
-                question_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-
-                json_data = leetcode_query.submission_list
-                json_data["variables"]["questionSlug"] = title_slug
-                submissions = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-
-                # Loop through ALL submissions instead of just [0]
-                submission_count = len(submissions["data"]["questionSubmissionList"]["submissions"])
-                print(f"[DEBUG] Found {submission_count} submissions for {title_slug}")
-                
-                for idx, submission in enumerate(submissions["data"]["questionSubmissionList"]["submissions"]):
-                    try:
-                        json_data = leetcode_query.submission_details
-                        json_data["variables"]["submissionId"] = submission["id"]
-                        submission_details = session.post("https://leetcode.com/graphql", json=json_data, headers=headers, timeout=10).json()
-
-                        if "errors" in submission_details:
-                            print(f"[ERROR] GraphQL error for submission {submission['id']}: {submission_details['errors']}")
-                            continue
+                    if "errors" in submission_details:
+                        print(f"[ERROR] GraphQL error for submission {submission['id']}: {submission_details['errors']}")
+                        continue
 
                         problem_info = {
                             "id": int(problem["stat"]["frontend_question_id"]),
@@ -100,20 +85,20 @@ def scrape_leetcode():
                         }
                         solved_problems.append(problem_info)
                         print(f"[DEBUG] Added submission {idx+1}/{submission_count} for {title_slug}")
-                    except Exception as e:
-                        print(f"[ERROR] Failed to process submission: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        continue
-                    
-                    time.sleep(0.5)  # Rate limiting
-            except Exception as e:
-                print(f"[ERROR] Failed to fetch problem details for {title_slug}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+                except Exception as e:
+                    print(f"[ERROR] Failed to process submission: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+                
+                time.sleep(0.5)  # Rate limiting
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch problem details for {title_slug}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
 
-    print(f"[DEBUG] Found {ac_count} accepted problems")
+    print(f"[DEBUG] Found {ac_count} problems with submissions")
     print(f"[DEBUG] Total submissions collected: {len(solved_problems)}")
     return sorted(solved_problems, key=lambda entry: entry["timestamp"])
 
