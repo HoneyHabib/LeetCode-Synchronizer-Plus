@@ -106,6 +106,7 @@ def update_readme(submissions):
 | # | Title | Difficulty | Skills |
 |---| ----- | ---------- | ------ |
 """
+
     for submission in submissions:
         title = f"[{submission['title']}](https://leetcode.com/problems/{submission['title_slug']})"
         skills = " ".join([f"`{skill}`" for skill in submission["skills"]])
@@ -121,81 +122,102 @@ def update_readme(submissions):
 
 def sync_github(commits, submissions):
     repo = Repo(os.getcwd())
+
+    # Authenticated remote
     url = urllib.parse.urlparse(repo.remote("origin").url)
     url = url._replace(netloc=f"{os.environ.get('GITHUB_TOKEN')}@" + url.netloc)
     url = url._replace(path=url.path + ".git")
     repo.remote("origin").set_url(url.geturl())
 
+    # Set git identity
     commit = list(repo.iter_commits())[0]
     repo.config_writer().set_value("user", "name", commit.author.name).release()
     repo.config_writer().set_value("user", "email", commit.author.email).release()
 
     for submission in submissions:
+        # ── timestamp
         ts = datetime.datetime.fromtimestamp(submission["timestamp"])
         timestamp_name = f"{ts.strftime('%Y-%m-%dT%H-%M-%S')}_{submission['timestamp']}"
+
+        # ── directory
+        dir_name = f"{str(submission['id']).zfill(4)}-{submission['title_slug']}"
+
+        # ── extension
+        if submission["language"] == "C++":
+            ext = "cpp"
+        elif submission["language"] in ["JavaScript", "JavaScript (Node.js)"]:
+            ext = "js"
+        elif submission["language"] == "MySQL":
+            ext = "sql"
+        elif submission["language"] == "Bash":
+            ext = "sh"
+        elif submission["language"] == "Python":
+            ext = "py"
+        elif submission["language"] == "Java":
+            ext = "java"
+        else:
+            ext = submission["language"].lower().replace(" ", "")
+
+        file_path = f"problems/{dir_name}/{timestamp_name}.{ext}"
+
+        # ── ✅ FILE-BASED SYNC (THE KEY FIX)
+        if os.path.exists(file_path):
+            continue
+
+        # ── write solution
+        pathlib.Path(f"problems/{dir_name}").mkdir(parents=True, exist_ok=True)
+        with open(file_path, "wt") as fd:
+            fd.write(submission["code"].strip())
+
+        # ── per-problem README
+        readme_path = f"problems/{dir_name}/README.md"
+        if not os.path.exists(readme_path):
+            with open(readme_path, "wt") as fd:
+                fd.write(
+                    f"<h2>{submission['id']}. {submission['title']}</h2>\n\n"
+                    + submission["content"].strip()
+                )
+
+        # ── update root README + submissions.json
+        submission["skills"].sort()
+        new_submission = {
+            "id": submission["id"],
+            "title": submission["title"],
+            "title_slug": submission["title_slug"],
+            "difficulty": submission["difficulty"],
+            "skills": submission["skills"],
+        }
+
+        saved = []
+        if os.path.isfile("submissions.json"):
+            with open("submissions.json", "rt") as fd:
+                saved = json.load(fd)
+
+        if new_submission not in saved:
+            saved.append(new_submission)
+            saved = sorted(saved, key=lambda e: e["id"])
+            update_readme(saved)
+            with open("submissions.json", "wt") as fd:
+                json.dump(saved, fd, indent=2)
+
+        # ── commit
         commit_message = (
             f"LeetCode [{submission['id']}] "
             f"{submission['title']} | {submission['language']} | {timestamp_name}"
         )
-        if commit_message not in commits:
-            dir_name = f"{str(submission['id']).zfill(4)}-{submission['title_slug']}"
-            if submission["language"] == "C++":
-                ext = "cpp"
-            elif submission["language"] in ["JavaScript", "JavaScript (Node.js)"]:
-                ext = "js"
-            elif submission["language"] == "MySQL":
-                ext = "sql"
-            elif submission["language"] == "Bash":
-                ext = "sh"
-            elif submission["language"] == "Python":
-                ext = "py"
-            elif submission["language"] == "Java":
-                ext = "java"
-            else:
-                # Fallback instead of crashing
-                ext = submission["language"].lower().replace(" ", "")
 
-            pathlib.Path(f"problems/{dir_name}").mkdir(parents=True, exist_ok=True)
-            with open(f"problems/{dir_name}/{timestamp_name}.{ext}", "wt") as fd:
-                fd.write(submission["code"].strip())
-            readme_path = f"problems/{dir_name}/README.md"
-            if not os.path.exists(readme_path):
-                with open(readme_path, "wt") as fd:
-                    content = f"<h2>{submission['id']}. {submission['title']}</h2>\n\n"
-                    content += submission["content"].strip()
-                    fd.write(content)
+        iso_datetime = email.utils.format_datetime(
+            datetime.datetime.fromtimestamp(submission["timestamp"])
+        )
+        os.environ["GIT_AUTHOR_DATE"] = iso_datetime
+        os.environ["GIT_COMMITTER_DATE"] = iso_datetime
 
-            submission["skills"].sort()
-            new_submission = {
-                "id": submission["id"],
-                "title": submission["title"],
-                "title_slug": submission["title_slug"],
-                "difficulty": submission["difficulty"],
-                "skills": submission["skills"],
-            }
+        repo.index.add(["problems", "README.md", "submissions.json"])
+        repo.index.commit(commit_message)
+        repo.git.push("origin")
 
-            saved_submissions = list()
-            if os.path.isfile("submissions.json"):
-                with open("submissions.json", "rt") as fd:
-                    saved_submissions = json.load(fd)
-
-            if new_submission not in saved_submissions:
-                saved_submissions.append(new_submission)
-                saved_submissions = sorted(saved_submissions, key=lambda entry: entry["id"])
-                update_readme(saved_submissions)
-                with open("submissions.json", "wt") as fd:
-                    json.dump(saved_submissions, fd, ensure_ascii=False, indent=2)
-
-            # RFC 2822 (Thu, 07 Apr 2005 22:13:13 +0200) / ISO 8601 (2005-04-07T22:13:13)
-            # https://github.com/gitpython-developers/GitPython/blob/master/git/objects/util.py#L134
-            iso_datetime = email.utils.format_datetime(datetime.datetime.fromtimestamp(submission["timestamp"]))
-            os.environ["GIT_AUTHOR_DATE"] = iso_datetime
-            os.environ["GIT_COMMITTER_DATE"] = iso_datetime
-            repo.index.add("**")
-            repo.index.commit(commit_message)
-            repo.git.push("origin")
-            os.unsetenv("GIT_AUTHOR_DATE")
-            os.unsetenv("GIT_COMMITTER_DATE")
+        os.environ.pop("GIT_AUTHOR_DATE", None)
+        os.environ.pop("GIT_COMMITTER_DATE", None)
 
 
 def main():
